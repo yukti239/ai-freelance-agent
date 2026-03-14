@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "yuktipandey661@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Domain Validators
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'bio', 'photoURL', 'role', 'pfiScore', 'walletBalance', 'createdAt', 'updatedAt']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['employer', 'freelancer', 'admin'];
+    }
+
+    function isValidProject(data) {
+      return hasRequiredFields(['title', 'employerId', 'totalBudget', 'status']) &&
+             data.status in ['draft', 'open', 'active', 'completed', 'disputed'] &&
+             data.escrowStatus in ['unfunded', 'funded', 'released', 'refunded'];
+    }
+
+    function isValidNotification(data) {
+      return hasRequiredFields(['userId', 'title', 'message', 'type', 'read', 'createdAt']) &&
+             data.userId is string &&
+             data.read is bool;
+    }
+
+    function isValidTransaction(data) {
+      return hasRequiredFields(['userId', 'amount', 'type', 'description', 'createdAt']) &&
+             data.userId is string &&
+             data.amount is number &&
+             data.type in ['deposit', 'payment', 'withdrawal'];
+    }
+
+    // User Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
+    }
+
+    // Project Rules
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.employerId == request.auth.uid && isValidProject(request.resource.data);
+      allow update: if isAuthenticated() && 
+                      (resource.data.employerId == request.auth.uid || resource.data.freelancerId == request.auth.uid || isAdmin());
+      
+      match /milestones/{milestoneId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && 
+                       (get(/databases/$(database)/documents/projects/$(projectId)).data.employerId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Submission Rules
+    match /submissions/{submissionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.freelancerId == request.auth.uid;
+      allow update: if isAuthenticated() && 
+                      (resource.data.freelancerId == request.auth.uid || 
+                       get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data.employerId == request.auth.uid || isAdmin());
+    }
+
+    // Notification Rules
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // User Settings Rules
+    match /userSettings/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+  }
+}
